@@ -1,3 +1,7 @@
+// This #include statement was automatically added by the Particle IDE.
+#include <ThingSpeak.h>
+#include <dotstar.h>
+
 /*
  *      Copyright 2017 Particle Industries, Inc.
  *
@@ -28,12 +32,48 @@
  *
  */
 
+/*
+        CheerLights
+
+        Reads the latest CheerLights color on ThingSpeak,   Visit http://www.cheerlights.com for more info.
+        ThingSpeak ( https://www.thingspeak.com ) is an analytic IoT platform service that allows you to aggregate, visualize and analyze live data streams in the cloud.
+
+        Copyright 2017, The MathWorks, Inc.
+
+        Documentation for the ThingSpeak Communication Library for Particle is in the doc folder where the library was installed.
+        See the accompaning licence file for licensing information.
+*/
+
 #include "xmastree.h"       // All macros (#define) are in xmastree.h
-#include <dotstar.h>
 
 /* Project name and version */
 #define WHOAMI              "XmasTree"
-#define VERSION             1
+#define VERSION             2
+
+TCPClient client;
+
+/* This is the ThingSpeak channel number for CheerLights
+  https://thingspeak.com/channels/1417.  Field 1 contains a string with
+  the latest CheerLights color. */
+unsigned long cheerLightsChannelNumber = 1417;
+
+// List of CheerLights color names
+String colorName[] = {"none","red","pink","green","blue","cyan","white","warmwhite","oldlace","purple","magenta","yellow","orange"};
+
+// Map of RGB values for each of the Cheerlight color names
+int colorRGB[][3] = {     0,  0,  0,  // "none"
+                        255,  0,  0,  // "red"
+                        255,192,203,  // "pink"
+                          0,255,  0,  // "green"
+                          0,  0,255,  // "blue"
+                          0,215, 75,  // "cyan",
+                        255,255,255,  // "white",
+                        255,223,223,  // "warmwhite",
+                        255,223,223,  // "oldlace",
+                        128,  0,128,  // "purple",
+                        255,  0,255,  // "magenta",
+                        255,255,  0,  // "yellow",
+                        255, 49,  0}; // "orange"};
 
 /* LED brightness value */
 /* Warning: less than 80 is highly recommended for safety and for your eyes */
@@ -52,6 +92,9 @@ int currentAnimation = 0;
 /* Current state of the effect when pressing the center button */
 int currentState = STATE_NONE;
 
+/* Current color of Cheerlights */
+int currentColor = -1;
+
 /* Set to TRUE to play the current song repeatedly */
 bool repeatSong = FALSE;
 
@@ -63,6 +106,48 @@ Adafruit_DotStar leds = Adafruit_DotStar(TOTAL_LED, PIN_LED_DATA, PIN_LED_CLOCK,
 
 /* Two threads will be used for processing songs and LED animations */
 Thread *animationWorker, *songWorker;
+
+// Generally, you should use "unsigned long" for variables that hold time
+// The value will quickly become too large for an int to store
+unsigned long previousMillis = 0;     // will store last time the routine was run
+
+// constants won't change:
+const long interval = 3000;           // interval at which to run the routine (milliseconds)
+
+
+/*
+ *  FUNCTION DEFINITIONS 
+ *                       */
+
+/* Fill the dots one after the other with a color */
+void colorWipe(uint32_t c, uint8_t wait) {
+    for(uint16_t i=0; i<leds.numPixels(); i++) {
+        leds.setPixelColor(i, c);
+        leds.show();
+        delay(wait);
+    }
+}
+
+void setColor(String color) {
+  // Look through the list of colors to find the one that was requested
+  for(int iColor = 0; iColor <= 12; iColor++)
+  {
+    if(color == colorName[iColor])
+    {
+        // Don't update the lights if it already is that color
+        if(iColor == currentColor) {
+            return;
+        }
+        // Else it is a new color, save it.
+        currentColor = iColor;
+        // When it matches, look up the RGB values for that color in the table,
+        // and change the lights
+        colorWipe(leds.Color(colorRGB[iColor][0], colorRGB[iColor][1], colorRGB[iColor][2]), 50);
+        Particle.publish("cheerLights", color);
+        return;
+    }
+  }
+}
 
 /* LEDs hardware initialization */
 void ledsInit()
@@ -122,6 +207,13 @@ void stopTone(String)
     noTone(PIN_BUZZER);
 }
 
+#include "songs.h"
+#include "animations.h"
+/* The no. of songs and LED animations, defined in songs.h and animations.h */
+int songCount = SONG_COUNT; 
+int animationCount = ANIMATION_COUNT;
+
+
 /* For publishing the device-connected event to the cloud */
 void publishConnected()
 {
@@ -149,13 +241,6 @@ void publishSongChanged()
     Serial.println("publishSongChanged");
     Particle.publish("songChanged", String(currentSong));
 }
-
-#include "songs.h"
-#include "animations.h"
-
-/* The no. of songs and LED animations, defined in songs.h and animations.h */
-int songCount = SONG_COUNT; 
-int animationCount = ANIMATION_COUNT;
 
 /* Play a song by the song ID */
 int playSong(String songIndex)
@@ -276,7 +361,7 @@ int setState(String state)
         currentState = STATE_NONE;
     } else
         return -1;
-    
+
     return 1;
 }
 
@@ -293,7 +378,6 @@ int nextSong()
         
         changeSong = true;
     }
-
     return currentSong;
 }
 
@@ -309,7 +393,6 @@ int prevSong()
                 
         changeSong = true;
     }
-
     return currentSong;
 }
 
@@ -325,7 +408,6 @@ int nextAnimation()
             
         changeAnimation = true;
     }
-
     return currentAnimation;
 }
 
@@ -341,9 +423,9 @@ int prevAnimation()
 
         changeAnimation = true;
     }
-    
     return currentAnimation;
 }
+
 
 /* Process the button states */
 int buttonPressed(String direction)
@@ -430,8 +512,9 @@ void processAnimations()
                 pulseWhite(5);
             else if (currentAnimation == REDGREEN)
                 redGreen(500);
+            else if (currentAnimation == SPARKCYAN)
+                sparkCyan(3);
         }
-
         delay(250);
     }
 }
@@ -455,7 +538,6 @@ void processSongs()
             else if (currentSong == SONG_SILENTNIGHT)
                 playSilentNight();
         }
-
         delay(2000);
     }
 }
@@ -564,7 +646,11 @@ void setup()
     /* Start to play the 1st song and LED animation */
     playSong("0");
     playAnimation("0");
+    
+    /* Connect and Subscribe to Thingspeak channel */
+    ThingSpeak.begin(client);
 }
+
 
 /* This will be called repeatedly */
 void loop()
@@ -577,4 +663,20 @@ void loop()
     
     /* Process the Cloud events */
     processCloud();
+
+    /* Only do Cheerlights if not doing Animation */
+    if (currentState == STATE_NONE || currentState == STATE_SONG) {
+        // Get the current time count
+        unsigned long currentMillis = millis();
+    
+        // check to see if the time interval has passed
+        if (currentMillis - previousMillis >= interval) {
+            // save the last time you ran the routine
+            previousMillis = currentMillis;
+    
+            // Read the Thingspeak channel, the latest value from field 1 of channel 1417
+            String color = ThingSpeak.readStringField(cheerLightsChannelNumber, 1);
+            setColor(color);
+        }
+    }
 }
